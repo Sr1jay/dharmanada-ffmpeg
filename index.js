@@ -38,11 +38,13 @@ app.post("/generate-video", upload.single("audio"), async (req, res) => {
         .outputOptions([
           "-c:v libx264",
           "-c:a aac",
-          "-b:a 192k",
+          "-b:a 128k",
           "-pix_fmt yuv420p",
           "-shortest",
           "-movflags +faststart",
-          "-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#C8490A"
+          "-preset ultrafast",
+          "-crf 28",
+          "-vf scale=720:1280"
         ])
         .output(outputPath)
         .on("end", resolve)
