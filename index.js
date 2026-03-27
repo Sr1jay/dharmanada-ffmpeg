@@ -9,50 +9,62 @@ const upload = multer({ dest: "uploads/" });
 
 app.post("/render", upload.single("audio"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).send("No audio file");
+    console.log("---- REQUEST START ----");
+
+    if (!req.file) {
+      console.log("No audio file received");
+      return res.status(400).send("No audio file");
+    }
 
     const images = req.body.images.split(",").map(s => s.trim());
     const audioPath = req.file.path;
 
-    console.log("Images:", images);
+    console.log("Images count:", images.length);
     console.log("Audio path:", audioPath);
 
     // STEP 1: download images
     for (let i = 0; i < images.length; i++) {
+      console.log(`Downloading image ${i}`);
       const response = await axios({
         url: images[i],
         method: "GET",
-        responseType: "arraybuffer"
+        responseType: "arraybuffer",
+        timeout: 10000
       });
       fs.writeFileSync(`img${i}.jpg`, response.data);
     }
 
-    // STEP 2: convert Telegram audio (.oga) → mp3
+    console.log("Images downloaded");
+
+    // STEP 2: convert audio
+    console.log("Converting audio...");
     execSync(`ffmpeg -y -i ${audioPath} audio.mp3`, { stdio: "inherit" });
+    console.log("Audio converted");
 
-    // STEP 3: build video from images
+    // STEP 3: build video (safe version)
+    console.log("Building video...");
+
     let inputs = "";
-    let filter = "";
-
     for (let i = 0; i < images.length; i++) {
       inputs += `-loop 1 -t 3 -i img${i}.jpg `;
-      filter += `[${i}:v]`;
     }
 
-    filter += `concat=n=${images.length}:v=1:a=0[v]`;
-
-    const cmd = `ffmpeg -y ${inputs} -i audio.mp3 -filter_complex "${filter}" -map "[v]" -map ${images.length}:a -shortest output.mp4`;
+    const cmd = `ffmpeg -y ${inputs} -i audio.mp3 -vf "scale=1280:720,format=yuv420p" -shortest output.mp4`;
 
     console.log("Running FFmpeg:", cmd);
 
-    execSync(cmd, { stdio: "inherit" });
+    execSync(cmd, { stdio: "inherit", timeout: 30000 });
 
-    // STEP 4: return video
+    console.log("Video created");
+
+    // STEP 4: send response
     res.sendFile(__dirname + "/output.mp4");
+
+    console.log("---- REQUEST END ----");
 
   } catch (err) {
     console.error("ERROR:", err);
-    res.status(500).send("FFmpeg failed");
+    res.status(500).send("Server failed");
   }
 });
 
