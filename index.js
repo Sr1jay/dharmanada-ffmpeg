@@ -16,7 +16,11 @@ app.post("/render", upload.single("audio"), async (req, res) => {
       return res.status(400).send("No audio file");
     }
 
-    const images = req.body.images.split(",").map(s => s.trim());
+   let images = req.body.images;
+
+if (typeof images === "string") {
+  images = images.split(",").map(s => s.trim());
+}
     const audioPath = req.file.path;
 
     console.log("Images count:", images.length);
