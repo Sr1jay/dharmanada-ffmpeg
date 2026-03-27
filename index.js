@@ -1,79 +1,56 @@
 const express = require("express");
-const axios = require("axios");
-const ffmpeg = require("fluent-ffmpeg");
-const fs = require("fs");
-const path = require("path");
 const multer = require("multer");
+const axios = require("axios");
+const fs = require("fs");
+const { execSync } = require("child_process");
 
 const app = express();
-const upload = multer({ dest: "/tmp/" });
+const upload = multer({ dest: "uploads/" });
 
-const BRAND_IMAGE_URL = process.env.BRAND_IMAGE_URL;
-
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "Dharma Nada FFmpeg Server" });
-});
-
-app.post("/generate-video", upload.single("audio"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No audio file provided" });
-  }
-
-  const jobId = Date.now();
-  const audioPath = req.file.path;
-  const imagePath = path.join("/tmp", `brand_${jobId}.png`);
-  const outputPath = path.join("/tmp", `video_${jobId}.mp4`);
-
+app.post("/render", upload.single("audio"), async (req, res) => {
   try {
-    console.log(`[${jobId}] Downloading brand image...`);
-    const imageResponse = await axios.get(BRAND_IMAGE_URL, { responseType: "arraybuffer" });
-    fs.writeFileSync(imagePath, imageResponse.data);
+    const images = req.body.images.split(",");
+    const audioPath = req.file.path;
 
-    console.log(`[${jobId}] Generating video with FFmpeg...`);
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(imagePath)
-        .inputOptions(["-loop 1"])
-        .input(audioPath)
-        .outputOptions([
-          "-c:v libx264",
-          "-c:a aac",
-          "-b:a 128k",
-          "-pix_fmt yuv420p",
-          "-shortest",
-          "-movflags +faststart",
-          "-preset ultrafast",
-          "-crf 28",
-          "-vf scale=720:1280"
-        ])
-        .output(outputPath)
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
-
-    console.log(`[${jobId}] Sending video...`);
-    const filename = req.body.filename || `dharmanada_${jobId}.mp4`;
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    const stream = fs.createReadStream(outputPath);
-    stream.pipe(res);
-    stream.on("end", () => {
-      [audioPath, imagePath, outputPath].forEach(f => {
-        if (fs.existsSync(f)) fs.unlinkSync(f);
+    // download images
+    for (let i = 0; i < images.length; i++) {
+      const response = await axios({
+        url: images[i],
+        method: "GET",
+        responseType: "stream"
       });
-    });
 
+      const writer = fs.createWriteStream(`img${i}.jpg`);
+      response.data.pipe(writer);
+
+      await new Promise((resolve) => writer.on("finish", resolve));
+    }
+
+    // build ffmpeg command
+    let inputs = "";
+    let filters = "";
+
+    for (let i = 0; i < images.length; i++) {
+      inputs += `-loop 1 -t 3 -i img${i}.jpg `;
+      filters += `[${i}:v]`;
+    }
+
+    filters += `concat=n=${images.length}:v=1:a=0[v]`;
+
+    const cmd = `
+      ffmpeg ${inputs} -i ${audioPath} \
+      -filter_complex "${filters}" \
+      -map "[v]" -map ${images.length}:a \
+      -shortest output.mp4
+    `;
+
+    execSync(cmd);
+
+    res.sendFile(__dirname + "/output.mp4");
   } catch (err) {
-    console.error(`[${jobId}] Error:`, err.message);
-    [audioPath, imagePath, outputPath].forEach(f => {
-      if (fs.existsSync(f)) fs.unlinkSync(f);
-    });
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    res.status(500).send("Error generating video");
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Dharma Nada FFmpeg Server running on port ${PORT}`);
-});
+app.listen(3000, () => console.log("Server running"));
