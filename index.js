@@ -9,7 +9,9 @@ const upload = multer({ dest: "uploads/" });
 
 app.post("/render", upload.single("audio"), async (req, res) => {
   try {
-    const images = req.body.images.split(",");
+    if (!req.file) return res.status(400).send("No audio file");
+
+    const images = req.body.images.split(",").map(s => s.trim());
     const audioPath = req.file.path;
 
     // download images
@@ -17,40 +19,32 @@ app.post("/render", upload.single("audio"), async (req, res) => {
       const response = await axios({
         url: images[i],
         method: "GET",
-        responseType: "stream"
+        responseType: "arraybuffer"
       });
-
-      const writer = fs.createWriteStream(`img${i}.jpg`);
-      response.data.pipe(writer);
-
-      await new Promise((resolve) => writer.on("finish", resolve));
+      fs.writeFileSync(`img${i}.jpg`, response.data);
     }
 
-    // build ffmpeg command
-    let inputs = "";
-    let filters = "";
-
+    // create input.txt for ffmpeg (much more stable)
+    let inputTxt = "";
     for (let i = 0; i < images.length; i++) {
-      inputs += `-loop 1 -t 3 -i img${i}.jpg `;
-      filters += `[${i}:v]`;
+      inputTxt += `file 'img${i}.jpg'\n`;
+      inputTxt += `duration 3\n`;
     }
+    inputTxt += `file 'img${images.length - 1}.jpg'\n`; // last image fix
+    fs.writeFileSync("input.txt", inputTxt);
 
-    filters += `concat=n=${images.length}:v=1:a=0[v]`;
-
-    const cmd = `
-      ffmpeg ${inputs} -i ${audioPath} \
-      -filter_complex "${filters}" \
-      -map "[v]" -map ${images.length}:a \
-      -shortest output.mp4
-    `;
-
-    execSync(cmd);
+    // run ffmpeg
+    execSync(
+      `ffmpeg -y -f concat -safe 0 -i input.txt -i ${audioPath} -vf scale=1280:720 -pix_fmt yuv420p -shortest output.mp4`,
+      { stdio: "inherit" }
+    );
 
     res.sendFile(__dirname + "/output.mp4");
+
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Error generating video");
+    console.error("ERROR:", err);
+    res.status(500).send("FFmpeg failed");
   }
 });
 
-app.listen(3000, () => console.log("Server running"));
+app.listen(3000, () => console.log("Server running on 3000"));
