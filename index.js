@@ -24,20 +24,22 @@ app.post("/render", upload.single("audio"), async (req, res) => {
       fs.writeFileSync(`img${i}.jpg`, response.data);
     }
 
-    // create input.txt for ffmpeg (much more stable)
-    let inputTxt = "";
-    for (let i = 0; i < images.length; i++) {
-      inputTxt += `file 'img${i}.jpg'\n`;
-      inputTxt += `duration 3\n`;
-    }
-    inputTxt += `file 'img${images.length - 1}.jpg'\n`; // last image fix
-    fs.writeFileSync("input.txt", inputTxt);
+    // build ffmpeg command properly (NO HANG)
+    let inputs = "";
+    let filter = "";
 
-    // run ffmpeg
-    execSync(
-      `ffmpeg -y -f concat -safe 0 -i input.txt -i ${audioPath} -vf scale=1280:720 -pix_fmt yuv420p -shortest output.mp4`,
-      { stdio: "inherit" }
-    );
+    for (let i = 0; i < images.length; i++) {
+      inputs += `-loop 1 -t 3 -i img${i}.jpg `;
+      filter += `[${i}:v]`;
+    }
+
+    filter += `concat=n=${images.length}:v=1:a=0[v]`;
+
+    const cmd = `ffmpeg -y ${inputs} -i ${audioPath} -filter_complex "${filter}" -map "[v]" -map ${images.length}:a -shortest output.mp4`;
+
+    console.log("Running:", cmd);
+
+    execSync(cmd, { stdio: "inherit" });
 
     res.sendFile(__dirname + "/output.mp4");
 
