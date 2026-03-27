@@ -14,7 +14,10 @@ app.post("/render", upload.single("audio"), async (req, res) => {
     const images = req.body.images.split(",").map(s => s.trim());
     const audioPath = req.file.path;
 
-    // download images
+    console.log("Images:", images);
+    console.log("Audio path:", audioPath);
+
+    // STEP 1: download images
     for (let i = 0; i < images.length; i++) {
       const response = await axios({
         url: images[i],
@@ -24,7 +27,10 @@ app.post("/render", upload.single("audio"), async (req, res) => {
       fs.writeFileSync(`img${i}.jpg`, response.data);
     }
 
-    // build ffmpeg command properly (NO HANG)
+    // STEP 2: convert Telegram audio (.oga) → mp3
+    execSync(`ffmpeg -y -i ${audioPath} audio.mp3`, { stdio: "inherit" });
+
+    // STEP 3: build video from images
     let inputs = "";
     let filter = "";
 
@@ -35,12 +41,13 @@ app.post("/render", upload.single("audio"), async (req, res) => {
 
     filter += `concat=n=${images.length}:v=1:a=0[v]`;
 
-    const cmd = `ffmpeg -y ${inputs} -i ${audioPath} -filter_complex "${filter}" -map "[v]" -map ${images.length}:a -shortest output.mp4`;
+    const cmd = `ffmpeg -y ${inputs} -i audio.mp3 -filter_complex "${filter}" -map "[v]" -map ${images.length}:a -shortest output.mp4`;
 
-    console.log("Running:", cmd);
+    console.log("Running FFmpeg:", cmd);
 
     execSync(cmd, { stdio: "inherit" });
 
+    // STEP 4: return video
     res.sendFile(__dirname + "/output.mp4");
 
   } catch (err) {
