@@ -1,76 +1,92 @@
 const express = require("express");
-const multer = require("multer");
 const axios = require("axios");
+const ffmpeg = require("fluent-ffmpeg");
 const fs = require("fs");
-const { execSync } = require("child_process");
+const path = require("path");
+const multer = require("multer");
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
+const upload = multer({ dest: "/tmp/" });
 
-app.post("/render", upload.single("audio"), async (req, res) => {
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", service: "Dharma Nada FFmpeg Server" });
+});
+
+app.post("/generate-video", upload.fields([
+  { name: "audio", maxCount: 1 },
+  { name: "image", maxCount: 1 }
+]), async (req, res) => {
+
+  if (!req.files || !req.files.audio) {
+    return res.status(400).json({ error: "No audio file provided" });
+  }
+
+  const jobId = Date.now();
+  const audioPath = req.files.audio[0].path;
+  const outputPath = path.join("/tmp", `video_${jobId}.mp4`);
+  let imagePath;
+  let tempImagePath = null;
+
   try {
-    console.log("---- REQUEST START ----");
-
-    if (!req.file) {
-      console.log("No audio file received");
-      return res.status(400).send("No audio file");
+    if (req.files.image) {
+      imagePath = req.files.image[0].path;
+    } else if (process.env.BRAND_IMAGE_URL) {
+      tempImagePath = path.join("/tmp", `brand_${jobId}.png`);
+      const imageResponse = await axios.get(process.env.BRAND_IMAGE_URL, { responseType: "arraybuffer" });
+      fs.writeFileSync(tempImagePath, imageResponse.data);
+      imagePath = tempImagePath;
+    } else {
+      return res.status(400).json({ error: "No image provided and no BRAND_IMAGE_URL set" });
     }
 
-   let images = req.body.images;
+    console.log(`[${jobId}] Generating video with FFmpeg...`);
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(imagePath)
+        .inputOptions(["-loop 1"])
+        .input(audioPath)
+        .outputOptions([
+          "-c:v libx264",
+          "-c:a aac",
+          "-b:a 128k",
+          "-pix_fmt yuv420p",
+          "-shortest",
+          "-movflags +faststart",
+          "-preset ultrafast",
+          "-crf 28",
+          "-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#C8490A"
+        ])
+        .output(outputPath)
+        .on("end", resolve)
+        .on("error", reject)
+        .run();
+    });
 
-if (typeof images === "string") {
-  images = images.split(",").map(s => s.trim());
-}
-    const audioPath = req.file.path;
-
-    console.log("Images count:", images.length);
-    console.log("Audio path:", audioPath);
-
-    // STEP 1: download images
-    for (let i = 0; i < images.length; i++) {
-      console.log(`Downloading image ${i}`);
-      const response = await axios({
-        url: images[i],
-        method: "GET",
-        responseType: "arraybuffer",
-        timeout: 10000
+    console.log(`[${jobId}] Sending video...`);
+    const filename = req.body.filename || `dharmanada_${jobId}.mp4`;
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+    stream.on("end", () => {
+      [audioPath, outputPath, tempImagePath].forEach(f => {
+        if (f && fs.existsSync(f)) fs.unlinkSync(f);
       });
-      fs.writeFileSync(`img${i}.jpg`, response.data);
-    }
-
-    console.log("Images downloaded");
-
-    // STEP 2: convert audio
-    console.log("Converting audio...");
-    execSync(`ffmpeg -y -i ${audioPath} audio.mp3`, { stdio: "inherit" });
-    console.log("Audio converted");
-
-    // STEP 3: build video (safe version)
-    console.log("Building video...");
-
-    let inputs = "";
-    for (let i = 0; i < images.length; i++) {
-      inputs += `-loop 1 -t 3 -i img${i}.jpg `;
-    }
-
-    const cmd = `ffmpeg -y ${inputs} -i audio.mp3 -vf "scale=1280:720,format=yuv420p" -shortest output.mp4`;
-
-    console.log("Running FFmpeg:", cmd);
-
-    execSync(cmd, { stdio: "inherit", timeout: 30000 });
-
-    console.log("Video created");
-
-    // STEP 4: send response
-    res.sendFile(__dirname + "/output.mp4");
-
-    console.log("---- REQUEST END ----");
+      if (imagePath && imagePath !== tempImagePath && fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    });
 
   } catch (err) {
-    console.error("ERROR:", err);
-    res.status(500).send("Server failed");
+    console.error(`[${jobId}] Error:`, err.message);
+    [audioPath, outputPath, tempImagePath].forEach(f => {
+      if (f && fs.existsSync(f)) fs.unlinkSync(f);
+    });
+    res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on", PORT));
+app.listen(PORT, () => {
+  console.log(`Dharma Nada FFmpeg Server running on port ${PORT}`);
+});
