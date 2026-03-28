@@ -54,7 +54,7 @@ app.post("/generate-video", upload.fields([
           "-movflags +faststart",
           "-preset ultrafast",
           "-crf 28",
-          "-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=#C8490A"
+          ""-vf scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920""
         ])
         .output(outputPath)
         .on("end", resolve)
